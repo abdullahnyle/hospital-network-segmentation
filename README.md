@@ -12,9 +12,9 @@ This project builds that segmentation for a small hospital network and documents
 
 Fifteen devices: two routers, two switches, nine end devices, two servers.
 
-- **R1** — Cisco 2911, router-on-a-stick, handles inter-VLAN routing via subinterfaces and enforces the access policy
-- **R-EXT** — Cisco 2911, represents the hospital's external-facing router
-- **SW1, SW2** — Cisco 2960-24TT, access switches carrying the four VLANs
+- **R1** - Cisco 2911, router-on-a-stick, handles inter-VLAN routing via subinterfaces and enforces the access policy
+- **R-EXT** - Cisco 2911, represents the hospital's external-facing router
+- **SW1, SW2** - Cisco 2960-24TT, access switches carrying the four VLANs
 - Nine PCs across the four zones, plus Clinical-Server and External-Server
 
 R1 connects to SW1 over an 802.1Q trunk and routes between VLANs using four subinterfaces. A separate point-to-point link connects R1 to R-EXT, which in turn connects to External-Server, simulating an external network the hospital's internal segments talk to under restricted conditions.
@@ -81,10 +81,10 @@ See `screenshots/` for:
 
 ## Repository contents
 
-- `hospital-segmentation.pkt` — the Packet Tracer file, open with Packet Tracer 8.x or later
-- `configs/` — plain text running configuration for R1, R-EXT, SW1, and SW2
-- `screenshots/` — topology, connectivity tests, and configuration evidence
-- `README.md` — this document
+- `hospital-segmentation.pkt` - the Packet Tracer file, open with Packet Tracer 8.x or later
+- `configs/` - plain text running configuration for R1, R-EXT, SW1, and SW2
+- `screenshots/` - topology, connectivity tests, and configuration evidence
+- `README.md` - this document
 
 ## A naming note
 
