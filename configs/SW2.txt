@@ -1,0 +1,46 @@
+! SW2 - access switch, Administration and Guest devices, trunk to SW1
+! Cisco 2960-24TT
+
+hostname SW2
+!
+vlan 10
+ name MEDICAL
+!
+vlan 20
+ name CLINICAL
+!
+vlan 30
+ name ADMIN
+!
+vlan 40
+ name GUEST
+!
+interface FastEthernet0/1
+ switchport mode access
+ switchport access vlan 10
+!
+interface FastEthernet0/2
+ switchport mode access
+ switchport access vlan 20
+!
+interface FastEthernet0/3
+ switchport mode access
+ switchport access vlan 30
+!
+interface FastEthernet0/4
+ switchport mode access
+ switchport access vlan 30
+!
+interface FastEthernet0/5
+ switchport mode access
+ switchport access vlan 40
+!
+interface FastEthernet0/6
+ switchport mode access
+ switchport access vlan 40
+!
+interface GigabitEthernet0/1
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+!
+end

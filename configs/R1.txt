@@ -1,0 +1,93 @@
+! R1 - router-on-a-stick, inter-VLAN routing, DHCP, and ACL enforcement
+! Cisco 2911
+
+hostname R1
+!
+ip dhcp excluded-address 192.168.10.1 192.168.10.9
+ip dhcp excluded-address 192.168.20.1 192.168.20.9
+ip dhcp excluded-address 192.168.30.1 192.168.30.9
+ip dhcp excluded-address 192.168.40.1 192.168.40.9
+ip dhcp excluded-address 192.168.20.10 192.168.20.19
+!
+ip dhcp pool MEDICAL
+ network 192.168.10.0 255.255.255.0
+ default-router 192.168.10.1
+!
+ip dhcp pool CLINICAL
+ network 192.168.20.0 255.255.255.0
+ default-router 192.168.20.1
+!
+ip dhcp pool ADMIN
+ network 192.168.30.0 255.255.255.0
+ default-router 192.168.30.1
+!
+ip dhcp pool GUEST
+ network 192.168.40.0 255.255.255.0
+ default-router 192.168.40.1
+!
+! DHCP pools are configured and structurally correct but not in active use.
+! The DHCP process stopped issuing leases router-wide during the final
+! build session, cause undetermined. All end devices are addressed
+! statically. See README for the full account.
+!
+interface GigabitEthernet0/0
+ no ip address
+ duplex auto
+ speed auto
+!
+interface GigabitEthernet0/0.10
+ encapsulation dot1Q 10
+ ip address 192.168.10.1 255.255.255.0
+ ip access-group 120 in
+!
+interface GigabitEthernet0/0.20
+ encapsulation dot1Q 20
+ ip address 192.168.20.1 255.255.255.0
+ ip access-group 140 in
+!
+interface GigabitEthernet0/0.30
+ encapsulation dot1Q 30
+ ip address 192.168.30.1 255.255.255.0
+ ip access-group 130 in
+!
+interface GigabitEthernet0/0.40
+ encapsulation dot1Q 40
+ ip address 192.168.40.1 255.255.255.0
+ ip access-group 110 in
+!
+interface GigabitEthernet0/1
+ ip address 203.0.113.1 255.255.255.252
+ duplex auto
+ speed auto
+!
+interface GigabitEthernet0/2
+ no ip address
+ duplex auto
+ speed auto
+ shutdown
+!
+ip route 198.51.100.0 255.255.255.0 203.0.113.2
+!
+! Rule 1: Guest cannot reach Medical, Clinical, or Administration
+access-list 110 deny ip 192.168.40.0 0.0.0.255 192.168.10.0 0.0.0.255
+access-list 110 deny ip 192.168.40.0 0.0.0.255 192.168.20.0 0.0.0.255
+access-list 110 deny ip 192.168.40.0 0.0.0.255 192.168.30.0 0.0.0.255
+access-list 110 permit ip any any
+!
+! Rule 2: Medical Devices cannot reach the external network
+access-list 120 deny ip 192.168.10.0 0.0.0.255 198.51.100.0 0.0.0.255
+access-list 120 permit ip any any
+!
+! Rule 3: Administration cannot reach Medical Devices
+access-list 130 deny ip 192.168.30.0 0.0.0.255 192.168.10.0 0.0.0.255
+access-list 130 permit ip any any
+!
+! Rule 4: Clinical Workstations can reach Medical Devices and the clinical server
+access-list 140 permit ip 192.168.20.0 0.0.0.255 192.168.10.0 0.0.0.255
+!
+line con 0
+line aux 0
+line vty 0 4
+ login
+!
+end

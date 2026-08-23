@@ -1,0 +1,18 @@
+! R-EXT - external segment router
+! Cisco 2911
+
+hostname R-EXT
+!
+interface GigabitEthernet0/0
+ ip address 203.0.113.2 255.255.255.252
+ duplex auto
+ speed auto
+!
+interface GigabitEthernet0/1
+ ip address 198.51.100.1 255.255.255.0
+ duplex auto
+ speed auto
+!
+ip route 0.0.0.0 0.0.0.0 203.0.113.1
+!
+end

@@ -1,0 +1,46 @@
+! SW1 - access switch, Medical and Clinical devices, trunk to R1 and SW2
+! Cisco 2960-24TT
+
+hostname SW1
+!
+vlan 10
+ name MEDICAL
+!
+vlan 20
+ name CLINICAL
+!
+vlan 30
+ name ADMIN
+!
+vlan 40
+ name GUEST
+!
+interface FastEthernet0/1
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+!
+! Fa0/1 carries the trunk to R1. The original build used Fa0/2 for this
+! link; it went into an unrecoverable down state during the final session
+! and the trunk was moved to Fa0/1. See README for details.
+!
+interface FastEthernet0/3
+ switchport mode access
+ switchport access vlan 10
+!
+interface FastEthernet0/4
+ switchport mode access
+ switchport access vlan 10
+!
+interface FastEthernet0/5
+ switchport mode access
+ switchport access vlan 20
+!
+interface FastEthernet0/6
+ switchport mode access
+ switchport access vlan 20
+!
+interface GigabitEthernet0/1
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,40
+!
+end
