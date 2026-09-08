@@ -1,25 +1,40 @@
 #!/usr/bin/env python3
 """
-Checks that R1's access-list configuration actually enforces the four
-access-policy rules the README claims, by parsing the committed config
-directly rather than trusting the prose description.
+Checks that the committed router and switch configs actually encode what
+the README claims, rather than trusting the prose description on its own.
+
+Two things get checked:
+- R1's access-lists enforce the four access-policy rules from the README
+  (guest denied to medical/clinical/admin, medical denied to external,
+  admin denied to medical, clinical permitted to medical).
+- SW1 and SW2 define the same four VLANs with matching names, and their
+  access ports land in the VLANs the README's zone table says they should.
 
 This doesn't test live network behavior (that's what the screenshots in
-screenshots/ are for) -- it checks that the *configuration itself*, as
-committed, encodes the stated policy. A config can be syntactically fine
+screenshots/ are for) -- it checks that the configuration itself, as
+committed, matches the stated design. A config can be syntactically fine
 and still not match what a README claims it does; this catches that class
 of mistake.
 
 Usage: python3 verify_acls.py
-Exit code 0 if all four rules are present and correctly directioned in the
-config, non-zero otherwise.
+Exit code 0 if every check passes, non-zero otherwise.
 """
 
 import re
 import sys
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).parent / "configs" / "R1.cfg"
+CONFIG_DIR = Path(__file__).parent / "configs"
+CONFIG_PATH = CONFIG_DIR / "R1.cfg"
+SW1_PATH = CONFIG_DIR / "SW1.cfg"
+SW2_PATH = CONFIG_DIR / "SW2.cfg"
+
+VLAN_NAMES = {
+    "10": "MEDICAL",
+    "20": "CLINICAL",
+    "30": "ADMIN",
+    "40": "GUEST",
+}
 
 VLAN_SUBNETS = {
     "medical": "192.168.10.0",
@@ -63,10 +78,79 @@ def parse_interface_acl_bindings(config_text):
     return bindings
 
 
+def parse_vlan_names(config_text):
+    """Extract each VLAN's number and name, in the order they're defined."""
+    vlans = {}
+    current_vlan = None
+    for line in config_text.splitlines():
+        line = line.strip()
+        vlan_match = re.match(r"vlan (\d+)$", line)
+        if vlan_match:
+            current_vlan = vlan_match.group(1)
+            continue
+        name_match = re.match(r"name (\S+)", line)
+        if name_match and current_vlan:
+            vlans[current_vlan] = name_match.group(1)
+            current_vlan = None
+    return vlans
+
+
+def parse_access_port_vlans(config_text):
+    """Map each access-mode interface to the VLAN it's assigned."""
+    ports = {}
+    current_iface = None
+    is_access = False
+    for line in config_text.splitlines():
+        line = line.strip()
+        iface_match = re.match(r"interface (\S+)", line)
+        if iface_match:
+            current_iface = iface_match.group(1)
+            is_access = False
+            continue
+        if line == "switchport mode access":
+            is_access = True
+            continue
+        vlan_match = re.match(r"switchport access vlan (\d+)", line)
+        if vlan_match and current_iface and is_access:
+            ports[current_iface] = vlan_match.group(1)
+    return ports
+
+
 def check_rule(description, condition):
     status = "PASS" if condition else "FAIL"
     print(f"[{status}] {description}")
     return condition
+
+
+def check_switch(name, path, expect_ports=None):
+    """Verify a switch's VLAN names match the README's zone table, and
+    optionally that specific access ports land in the expected VLAN."""
+    if not path.exists():
+        print(f"Could not find {path}")
+        sys.exit(2)
+
+    config_text = path.read_text()
+    vlans = parse_vlan_names(config_text)
+    ports = parse_access_port_vlans(config_text)
+
+    results = []
+    results.append(check_rule(
+        f"{name}: all four VLANs (10/20/30/40) are defined",
+        set(VLAN_NAMES) <= set(vlans),
+    ))
+    results.append(check_rule(
+        f"{name}: VLAN names match the README's zone table",
+        all(vlans.get(num) == label for num, label in VLAN_NAMES.items() if num in vlans),
+    ))
+
+    if expect_ports:
+        for iface, expected_vlan in expect_ports.items():
+            results.append(check_rule(
+                f"{name}: {iface} is assigned to VLAN {expected_vlan} ({VLAN_NAMES[expected_vlan]})",
+                ports.get(iface) == expected_vlan,
+            ))
+
+    return results
 
 
 def main():
@@ -146,13 +230,42 @@ def main():
     ))
 
     print()
+    print("Checking switch VLAN assignments against the README's zone table...")
+    print()
+
+    sw1_results = check_switch(
+        "SW1", SW1_PATH,
+        expect_ports={
+            "FastEthernet0/3": "10",
+            "FastEthernet0/4": "10",
+            "FastEthernet0/5": "20",
+            "FastEthernet0/6": "20",
+        },
+    )
+    print()
+    sw2_results = check_switch(
+        "SW2", SW2_PATH,
+        expect_ports={
+            "FastEthernet0/1": "10",
+            "FastEthernet0/2": "20",
+            "FastEthernet0/3": "30",
+            "FastEthernet0/4": "30",
+            "FastEthernet0/5": "40",
+            "FastEthernet0/6": "40",
+        },
+    )
+
+    results.extend(sw1_results)
+    results.extend(sw2_results)
+
+    print()
     if all(results):
-        print("All checks passed. The committed R1 config matches the")
-        print("access policy described in the README.")
+        print("All checks passed. The committed configs match the access")
+        print("policy and zone assignments described in the README.")
         sys.exit(0)
     else:
         failed = len([r for r in results if not r])
-        print(f"{failed} check(s) failed. The config does not fully match")
+        print(f"{failed} check(s) failed. The configs do not fully match")
         print("what the README claims -- see FAIL lines above.")
         sys.exit(1)
 
