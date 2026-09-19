@@ -1,6 +1,6 @@
 # Hospital Network Segmentation
 
-A Cisco Packet Tracer project for a Computer Networks lab assignment. It designs and builds a hospital network segmented by clinical function and risk rather than by physical location, and it argues for that design the way you'd argue it to the person who has to sign off on it, not the way you'd write it up for a grader.
+A Cisco Packet Tracer coursework project with four hospital network zones, router ACLs, exported configurations, and a Python policy checker.
 
 ## What this is for
 
@@ -33,17 +33,32 @@ R1 connects to SW1 over an 802.1Q trunk and routes between VLANs using four subi
 1. **Guest cannot reach Medical Devices, Clinical Workstations, or Administration.** Outbound traffic is otherwise permitted.
 2. **Medical Devices cannot reach the external network.**
 3. **Administration cannot reach Medical Devices.**
-4. **Clinical Workstations can reach Medical Devices and the clinical server.**
+4. **Clinical Workstations can route to Medical Devices.** Other routed destinations remain permitted because the stated policy does not restrict them. The clinical server is on the same VLAN, so access to it does not traverse this router ACL.
 
-Each rule is enforced with an extended ACL applied inbound on the relevant router subinterface. Inbound placement matters here: traffic from a VLAN arrives on its subinterface before R1 makes a routing decision, so filtering it there catches it before it goes anywhere. Applying the same ACL outbound would mean the routing decision already happened, and the ACL would be filtering traffic in the wrong direction entirely.
+Routed traffic is filtered inbound on its source VLAN's R1 subinterface. ACLs are evaluated in order, with the first matching rule deciding the result and an implicit deny at the end. Outbound ACLs are also valid, but would require a different placement and policy design.
+
+### Effective routed policy
+
+| Source | Medical | Clinical | Administration | Guest | External subnet |
+|---|---|---|---|---|---|
+| Medical | Same VLAN | Permit | Permit | Permit | Deny |
+| Clinical | Permit | Same VLAN | Permit | Permit | Permit |
+| Administration | Deny | Permit | Same VLAN | Permit | Permit |
+| Guest | Deny | Deny | Deny | Same VLAN | Permit |
+
+This table describes individual packets at the source ACL, not complete bidirectional sessions. These ACLs are stateless: a Medical packet can reach Administration, but the Administration reply is denied. They do not provide general isolation between every pair of zones.
+
+ACL 140 previously ended after the Clinical-to-Medical permit. Cisco's implicit deny therefore blocked every other routed Clinical flow, which did not match the four stated restrictions above. The final permit corrects the configuration to match the documented policy. It does not establish what the original historical intention was.
+
+Run `python verify_acls.py` to check representative flows, rule order, implicit denial, exact inbound bindings, and switch VLAN assignments. Run `python -m unittest discover -s tests` for checker regression tests. The checker supports the numbered `ip` ACL syntax in these exports; it does not simulate routing, application sessions, DHCP, or the binary Packet Tracer file.
 
 ## Why four zones, and what that costs
 
 Four zones is a choice, not the obvious answer. It would be simpler to run two zones, medical-and-clinical together and everything else separate, and simpler still to run one flat network with no segmentation at all. Both of those are worse for security and both of those are less work to administer. That trade runs in both directions and it's worth being honest about which way this design went.
 
-More segmentation buys better containment. If a guest device gets compromised, or an admin PC gets hit with ransomware, the blast radius stops at the VLAN boundary instead of spreading to equipment that's keeping someone alive. That containment is the entire reason this project exists.
+The configured ACLs block Guest traffic to the internal zones, Medical traffic to the external segment, and Administration traffic to Medical. Other paths remain permitted, as shown in the table above. Segmentation reduces specific paths for lateral movement; it does not establish complete containment or validate a production hospital design.
 
-It costs administrative burden, and that cost is real, not theoretical. Every device that gets added to the network needs to be classified into the correct zone before it's plugged in. Every time a device moves, physically or organizationally, someone has to update its VLAN assignment. A new infusion pump model, a nurse's workstation getting swapped out, a new admin hire's laptop: each of these is a small decision that has to be made correctly, every time, by whoever's doing hospital IT. Four zones roughly quadruples that administrative surface compared to a flat network. This design accepts that cost because the alternative, an infusion pump reachable from guest wifi, is worse.
+It costs administrative burden, and that cost is real, not theoretical. Every device that gets added to the network needs to be classified into the correct zone before it's plugged in. Every time a device moves, physically or organizationally, someone has to update its VLAN assignment. A new infusion pump model, a nurse's workstation getting swapped out, a new admin hire's laptop: each of these is a small decision that has to be made correctly, every time, by whoever's doing hospital IT. The extra zones add classification and configuration work; this project does not measure that overhead. This design accepts that cost because the alternative, an infusion pump reachable from guest wifi, is worse.
 
 The specific number four also isn't arbitrary within this design. It maps to four distinct trust levels that already exist in how a hospital operates: devices that keep people alive, staff who operate on those devices, staff who don't need to touch them, and people who aren't staff at all. Splitting further, by department or by floor, would add zones without adding a trust distinction that matters for this policy, which is exactly the kind of scope creep this project deliberately avoided.
 
@@ -51,7 +66,7 @@ The specific number four also isn't arbitrary within this design. It maps to fou
 
 Most demonstrations of a network prove that things work. This project includes an explicit demonstration that something is correctly blocked, because that's the actual evidence that the access policy does what this document claims.
 
-The screenshots directory includes a ping from a guest device to a medical device timing out with an explicit `destination host unreachable` response from R1, placed next to a ping from a clinical workstation to the same device succeeding. The unreachable response, rather than a silent timeout, matters: it shows the router received the packet and actively rejected it under the ACL, rather than the packet getting lost for some unrelated reason.
+The screenshots directory includes a ping from a guest device to a medical device timing out with an explicit `destination host unreachable` response from R1, placed next to a ping from a clinical workstation to the same device succeeding. The result is consistent with the configured ACL. An unreachable response alone does not identify the cause; the configuration and permitted control test provide additional context.
 
 ## What could not be determined, and what a real deployment would require
 
@@ -59,9 +74,11 @@ This is the most important section in this document, more important than the top
 
 **This design assumes a device inventory that does not exist.** Every VLAN assignment in this project starts from already knowing what a device is: this is an infusion pump, this is an admin PC, this is a guest laptop. In a real hospital that inventory doesn't exist by default, and building it is not a paperwork exercise, it's the actual first step of any segmentation project. A device that isn't known can't be classified, and a device that isn't classified can't be put in the right zone. In practice this means the real first phase of a project like this is walking the building, or pulling from procurement and asset management systems, and building a list of every device that touches the network before anything gets segmented. This project skips that step because the simulated environment defines the device list in advance. A real one won't.
 
-**DHCP is documented but not demonstrated as functioning.** All four DHCP pools are configured correctly, structurally, with the right networks, default routers, and exclusions. During the final build session the DHCP process stopped issuing leases across every VLAN, not just one, for reasons that weren't isolated before the deadline. Two separate fixes were attempted, bouncing the affected interface and restarting the DHCP service entirely, and neither resolved it. Rather than continue chasing an intermittent simulator-level fault against a fixed deadline, every end device was assigned a static IP address instead, and the access policy was fully tested against that static addressing. The DHCP pools remain in the configuration as a correct reference, but this project does not claim DHCP was proven working end to end, because it wasn't.
+**DHCP is documented but not demonstrated as functioning.** All four DHCP pools are configured correctly, structurally, with the right networks, default routers, and exclusions. During the final build session the DHCP process stopped issuing leases across every VLAN, not just one, for reasons that weren't isolated before the deadline. Two separate fixes were attempted, bouncing the affected interface and restarting the DHCP service entirely, and neither resolved it. Rather than continue chasing an intermittent simulator-level fault against a fixed deadline, every end device was assigned a static IP address instead, and the recorded connectivity tests used that static addressing. Rule three remained unconfirmed. The DHCP pools remain in the configuration as a correct reference, but this project does not claim DHCP was proven working end to end, because it wasn't.
 
 **Rule three's live behavior is unconfirmed.** The ACL denying Administration access to Medical Devices was written and applied, and its binding to the correct router subinterface was independently confirmed. Testing it live turned up a fault that could not be resolved in the time available: pings between other zones on the same switching path worked correctly, and the trunk and switch ports involved were checked and confirmed healthy, but Administration's traffic did not behave as expected and the specific cause, most likely something at the subinterface level, was not isolated before the deadline. The configuration is believed correct based on it matching the pattern of the other three rules exactly, but this document does not claim it as tested, because it wasn't.
+
+**The external subnet is a simulation, not a demonstrated internet perimeter.** The project applies source-VLAN rules on R1, but it does not implement or test a complete inbound firewall policy on R-EXT. Inbound perimeter filtering is outside the demonstrated scope.
 
 **Physical port to device mapping was confirmed at the VLAN level, not the individual cable level**, apart from InfusionPump-01. This is a coursework project working from a topology diagram, not a hospital with a cable management system, and it's worth naming that gap rather than implying a precision that isn't there.
 
@@ -71,13 +88,7 @@ None of this is a defense of leaving these questions open. It's a statement of w
 
 ## Test evidence
 
-See `screenshots/` for:
-- Topology overview
-- VLAN and trunk status on both switches
-- The guest-denied / clinical-permitted paired ping test against the same medical device
-- Rule two's live test, a medical device denied external access
-- Rule four's live test, a clinical workstation reaching a medical device
-- Router configuration output for the interfaces and ACLs above
+The four files in `screenshots/` show the topology, guest isolation, Medical-to-External denial, and Clinical-to-Medical connectivity. Plain-text router and switch exports are in `configs/`. The ACL 140 correction is present in the text configuration and policy checker. The Packet Tracer file and screenshots preserve the original coursework state and have not been rerun or regenerated after that correction.
 
 ## Repository contents
 

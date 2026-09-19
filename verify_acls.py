@@ -6,7 +6,7 @@ the README claims, rather than trusting the prose description on its own.
 Two things get checked:
 - R1's access-lists enforce the four access-policy rules from the README
   (guest denied to medical/clinical/admin, medical denied to external,
-  admin denied to medical, clinical permitted to medical).
+  admin denied to medical, clinical permitted to medical and otherwise).
 - SW1 and SW2 define the same four VLANs with matching names, and their
   access ports land in the VLANs the README's zone table says they should.
 
@@ -20,6 +20,7 @@ Usage: python3 verify_acls.py
 Exit code 0 if every check passes, non-zero otherwise.
 """
 
+from ipaddress import IPv4Address
 import re
 import sys
 from pathlib import Path
@@ -48,18 +49,40 @@ EXTERNAL_SUBNET = "198.51.100.0"
 
 def parse_acl_lines(config_text):
     """Extract every access-list line as (acl_number, action, src, dst)."""
-    pattern = re.compile(
-        r"access-list (\d+) (permit|deny) ip (\S+) [\d.]+ (\S+) [\d.]+"
-    )
     entries = []
     for line in config_text.splitlines():
-        match = pattern.match(line.strip())
-        if match:
-            acl_num, action, src, dst = match.groups()
-            entries.append(
-                {"acl": acl_num, "action": action, "src": src, "dst": dst}
-            )
+        tokens = line.strip().split()
+        if not tokens or tokens[0] != "access-list":
+            continue
+        if len(tokens) < 4 or tokens[2] not in {"permit", "deny"} or tokens[3] != "ip":
+            raise ValueError(f"Unsupported ACL syntax: {line}")
+        def address(offset):
+            if tokens[offset] == "any":
+                return (0, 0xffffffff), offset + 1
+            if tokens[offset] == "host":
+                return (int(IPv4Address(tokens[offset + 1])), 0), offset + 2
+            return (int(IPv4Address(tokens[offset])), int(IPv4Address(tokens[offset + 1]))), offset + 2
+        try:
+            src, offset = address(4)
+            dst, offset = address(offset)
+        except (IndexError, ValueError) as exc:
+            raise ValueError(f"Invalid ACL address: {line}") from exc
+        if offset != len(tokens):
+            raise ValueError(f"Unsupported ACL options: {line}")
+        entries.append({"acl": tokens[1], "action": tokens[2], "src": src, "dst": dst})
     return entries
+
+
+def evaluate_acl(entries, acl, source, destination):
+    """Evaluate numbered IP rules in order, including the implicit deny."""
+    def matches(value, rule):
+        network, wildcard = rule
+        mask = 0xffffffff ^ wildcard
+        return (int(IPv4Address(value)) & mask) == (network & mask)
+    for entry in entries:
+        if entry["acl"] == acl and matches(source, entry["src"]) and matches(destination, entry["dst"]):
+            return entry["action"]
+    return "deny"
 
 
 def parse_interface_acl_bindings(config_text):
@@ -165,52 +188,22 @@ def main():
 
     results = []
 
-    # Rule 1: Guest cannot reach Medical, Clinical, or Administration.
-    guest_denies = {
-        e["dst"] for e in acl_entries
-        if e["src"] == VLAN_SUBNETS["guest"] and e["action"] == "deny"
-    }
-    results.append(check_rule(
-        "Rule 1: Guest denied to Medical, Clinical, and Administration",
-        {VLAN_SUBNETS["medical"], VLAN_SUBNETS["clinical"], VLAN_SUBNETS["admin"]}
-        <= guest_denies,
-    ))
-
-    # Rule 2: Medical Devices cannot reach the external network.
-    medical_denies_external = any(
-        e["src"] == VLAN_SUBNETS["medical"]
-        and e["dst"] == EXTERNAL_SUBNET
-        and e["action"] == "deny"
-        for e in acl_entries
-    )
-    results.append(check_rule(
-        "Rule 2: Medical Devices denied to external network",
-        medical_denies_external,
-    ))
-
-    # Rule 3: Administration cannot reach Medical Devices.
-    admin_denies_medical = any(
-        e["src"] == VLAN_SUBNETS["admin"]
-        and e["dst"] == VLAN_SUBNETS["medical"]
-        and e["action"] == "deny"
-        for e in acl_entries
-    )
-    results.append(check_rule(
-        "Rule 3: Administration denied to Medical Devices",
-        admin_denies_medical,
-    ))
-
-    # Rule 4: Clinical Workstations can reach Medical Devices.
-    clinical_permits_medical = any(
-        e["src"] == VLAN_SUBNETS["clinical"]
-        and e["dst"] == VLAN_SUBNETS["medical"]
-        and e["action"] == "permit"
-        for e in acl_entries
-    )
-    results.append(check_rule(
-        "Rule 4: Clinical Workstations permitted to Medical Devices",
-        clinical_permits_medical,
-    ))
+    expected_bindings = {"10": "120", "20": "140", "30": "130", "40": "110"}
+    destinations = {"10": "192.168.10.25", "20": "192.168.20.25",
+                    "30": "192.168.30.25", "40": "192.168.40.25",
+                    "external": "198.51.100.25"}
+    denied = {"10": {"external"}, "20": set(),
+              "30": {"10"}, "40": {"10", "20", "30"}}
+    for vlan, expected_acl in expected_bindings.items():
+        iface = f"GigabitEthernet0/0.{vlan}"
+        acl = bindings.get(iface)
+        results.append(check_rule(f"{iface}: inbound ACL {expected_acl}", acl == expected_acl))
+        for target, destination in destinations.items():
+            if target == vlan:
+                continue  # Same-VLAN traffic does not pass through R1.
+            expected = "deny" if target in denied[vlan] else "permit"
+            actual = evaluate_acl(acl_entries, acl, destinations[vlan], destination) if acl else "permit"
+            results.append(check_rule(f"VLAN {vlan} -> {target}: {expected}", actual == expected))
 
     # Structural check: every ACL referenced by an interface binding
     # actually has at least one entry defined, and vice versa where
@@ -260,7 +253,7 @@ def main():
 
     print()
     if all(results):
-        print("All checks passed. The committed configs match the access")
+        print("All checks passed for the sampled IP flows and configured access")
         print("policy and zone assignments described in the README.")
         sys.exit(0)
     else:
